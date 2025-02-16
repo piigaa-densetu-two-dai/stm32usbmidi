@@ -1,4 +1,4 @@
-#include <stdlib.h>
+#include <stddef.h>
 #include <libopencm3/usb/usbd.h>
 #include <libopencm3/usb/audio.h>
 #include <libopencm3/usb/midi.h>
@@ -7,6 +7,8 @@
 #include <libopencm3/stm32/gpio.h>
 #include <libopencm3/stm32/usart.h>
 #include <libopencm3/cm3/nvic.h>
+#include <libopencm3/cm3/scb.h>
+#include <libopencm3/cm3/vector.h>
 
 /*
  * All references in this file come from Universal Serial Bus Device Class
@@ -33,22 +35,33 @@ static const struct usb_device_descriptor dev = {
 	.bNumConfigurations = 1,
 };
 
+struct usb_midi3_endpoint_descriptor {
+	struct usb_midi_endpoint_descriptor_head head;
+	struct usb_midi_endpoint_descriptor_body jack[3];
+} __attribute__((packed));
+
 /*
  * Midi specific endpoint descriptors.
  */
-static const struct usb_midi_endpoint_descriptor midi_bulk_endp[] = {{
+static const struct usb_midi3_endpoint_descriptor midi_bulk_endp[] = {{
 	/*
 	 * Table B-12: MIDI Adapter Class-specific Bulk OUT Endpoint
 	 * Descriptor
 	 */
 	.head = {
-		.bLength = sizeof(struct usb_midi_endpoint_descriptor),
+		.bLength = sizeof(struct usb_midi3_endpoint_descriptor),
 		.bDescriptorType = USB_AUDIO_DT_CS_ENDPOINT,
 		.bDescriptorSubType = USB_MIDI_SUBTYPE_MS_GENERAL,
-		.bNumEmbMIDIJack = 1,
+		.bNumEmbMIDIJack = 3,
 	},
 	.jack[0] = {
 		.baAssocJackID = 0x01,
+	},
+	.jack[1] = {
+		.baAssocJackID = 0x05,
+	},
+	.jack[2] = {
+		.baAssocJackID = 0x09,
 	},
 }, {
 	/*
@@ -56,13 +69,19 @@ static const struct usb_midi_endpoint_descriptor midi_bulk_endp[] = {{
 	 * Descriptor
 	 */
 	.head = {
-		.bLength = sizeof(struct usb_midi_endpoint_descriptor),
+		.bLength = sizeof(struct usb_midi3_endpoint_descriptor),
 		.bDescriptorType = USB_AUDIO_DT_CS_ENDPOINT,
 		.bDescriptorSubType = USB_MIDI_SUBTYPE_MS_GENERAL,
-		.bNumEmbMIDIJack = 1,
+		.bNumEmbMIDIJack = 3,
 	},
 	.jack[0] = {
 		.baAssocJackID = 0x03,
+	},
+	.jack[1] = {
+		.baAssocJackID = 0x07,
+	},
+	.jack[2] = {
+		.baAssocJackID = 0x0b,
 	},
 }};
 
@@ -138,10 +157,18 @@ static const struct usb_interface_descriptor audio_control_iface[] = {{
  */
 static const struct {
 	struct usb_midi_header_descriptor header;
-	struct usb_midi_in_jack_descriptor in_embedded;
-	struct usb_midi_in_jack_descriptor in_external;
-	struct usb_midi_out_jack_descriptor out_embedded;
-	struct usb_midi_out_jack_descriptor out_external;
+	struct usb_midi_in_jack_descriptor in_embedded1;
+	struct usb_midi_in_jack_descriptor in_external1;
+	struct usb_midi_out_jack_descriptor out_embedded1;
+	struct usb_midi_out_jack_descriptor out_external1;
+	struct usb_midi_in_jack_descriptor in_embedded2;
+	struct usb_midi_in_jack_descriptor in_external2;
+	struct usb_midi_out_jack_descriptor out_embedded2;
+	struct usb_midi_out_jack_descriptor out_external2;
+	struct usb_midi_in_jack_descriptor in_embedded3;
+	struct usb_midi_in_jack_descriptor in_external3;
+	struct usb_midi_out_jack_descriptor out_embedded3;
+	struct usb_midi_out_jack_descriptor out_external3;
 } __attribute__((packed)) midi_streaming_functional_descriptors = {
 	/* Table B-6: Midi Adapter Class-specific MS Interface Descriptor */
 	.header = {
@@ -152,7 +179,7 @@ static const struct {
 		.wTotalLength = sizeof(midi_streaming_functional_descriptors),
 	},
 	/* Table B-7: MIDI Adapter MIDI IN Jack Descriptor (Embedded) */
-	.in_embedded = {
+	.in_embedded1 = {
 		.bLength = sizeof(struct usb_midi_in_jack_descriptor),
 		.bDescriptorType = USB_AUDIO_DT_CS_INTERFACE,
 		.bDescriptorSubtype = USB_MIDI_SUBTYPE_MIDI_IN_JACK,
@@ -161,7 +188,7 @@ static const struct {
 		.iJack = 0x00,
 	},
 	/* Table B-8: MIDI Adapter MIDI IN Jack Descriptor (External) */
-	.in_external = {
+	.in_external1 = {
 		.bLength = sizeof(struct usb_midi_in_jack_descriptor),
 		.bDescriptorType = USB_AUDIO_DT_CS_INTERFACE,
 		.bDescriptorSubtype = USB_MIDI_SUBTYPE_MIDI_IN_JACK,
@@ -170,7 +197,7 @@ static const struct {
 		.iJack = 0x00,
 	},
 	/* Table B-9: MIDI Adapter MIDI OUT Jack Descriptor (Embedded) */
-	.out_embedded = {
+	.out_embedded1 = {
 		.head = {
 			.bLength = sizeof(struct usb_midi_out_jack_descriptor),
 			.bDescriptorType = USB_AUDIO_DT_CS_INTERFACE,
@@ -188,7 +215,7 @@ static const struct {
 		}
 	},
 	/* Table B-10: MIDI Adapter MIDI OUT Jack Descriptor (External) */
-	.out_external = {
+	.out_external1 = {
 		.head = {
 			.bLength = sizeof(struct usb_midi_out_jack_descriptor),
 			.bDescriptorType = USB_AUDIO_DT_CS_INTERFACE,
@@ -199,6 +226,114 @@ static const struct {
 		},
 		.source[0] = {
 			.baSourceID = 0x01,
+			.baSourcePin = 0x01,
+		},
+		.tail = {
+			.iJack = 0x00,
+		},
+	},
+	/* Table B-7: MIDI Adapter MIDI IN Jack Descriptor (Embedded) */
+	.in_embedded2 = {
+		.bLength = sizeof(struct usb_midi_in_jack_descriptor),
+		.bDescriptorType = USB_AUDIO_DT_CS_INTERFACE,
+		.bDescriptorSubtype = USB_MIDI_SUBTYPE_MIDI_IN_JACK,
+		.bJackType = USB_MIDI_JACK_TYPE_EMBEDDED,
+		.bJackID = 0x05,
+		.iJack = 0x00,
+	},
+	/* Table B-8: MIDI Adapter MIDI IN Jack Descriptor (External) */
+	.in_external2 = {
+		.bLength = sizeof(struct usb_midi_in_jack_descriptor),
+		.bDescriptorType = USB_AUDIO_DT_CS_INTERFACE,
+		.bDescriptorSubtype = USB_MIDI_SUBTYPE_MIDI_IN_JACK,
+		.bJackType = USB_MIDI_JACK_TYPE_EXTERNAL,
+		.bJackID = 0x06,
+		.iJack = 0x00,
+	},
+	/* Table B-9: MIDI Adapter MIDI OUT Jack Descriptor (Embedded) */
+	.out_embedded2 = {
+		.head = {
+			.bLength = sizeof(struct usb_midi_out_jack_descriptor),
+			.bDescriptorType = USB_AUDIO_DT_CS_INTERFACE,
+			.bDescriptorSubtype = USB_MIDI_SUBTYPE_MIDI_OUT_JACK,
+			.bJackType = USB_MIDI_JACK_TYPE_EMBEDDED,
+			.bJackID = 0x07,
+			.bNrInputPins = 1,
+		},
+		.source[0] = {
+			.baSourceID = 0x06,
+			.baSourcePin = 0x01,
+		},
+		.tail = {
+			.iJack = 0x00,
+		}
+	},
+	/* Table B-10: MIDI Adapter MIDI OUT Jack Descriptor (External) */
+	.out_external2 = {
+		.head = {
+			.bLength = sizeof(struct usb_midi_out_jack_descriptor),
+			.bDescriptorType = USB_AUDIO_DT_CS_INTERFACE,
+			.bDescriptorSubtype = USB_MIDI_SUBTYPE_MIDI_OUT_JACK,
+			.bJackType = USB_MIDI_JACK_TYPE_EXTERNAL,
+			.bJackID = 0x08,
+			.bNrInputPins = 1,
+		},
+		.source[0] = {
+			.baSourceID = 0x05,
+			.baSourcePin = 0x01,
+		},
+		.tail = {
+			.iJack = 0x00,
+		},
+	},
+	/* Table B-7: MIDI Adapter MIDI IN Jack Descriptor (Embedded) */
+	.in_embedded3 = {
+		.bLength = sizeof(struct usb_midi_in_jack_descriptor),
+		.bDescriptorType = USB_AUDIO_DT_CS_INTERFACE,
+		.bDescriptorSubtype = USB_MIDI_SUBTYPE_MIDI_IN_JACK,
+		.bJackType = USB_MIDI_JACK_TYPE_EMBEDDED,
+		.bJackID = 0x09,
+		.iJack = 0x00,
+	},
+	/* Table B-8: MIDI Adapter MIDI IN Jack Descriptor (External) */
+	.in_external3 = {
+		.bLength = sizeof(struct usb_midi_in_jack_descriptor),
+		.bDescriptorType = USB_AUDIO_DT_CS_INTERFACE,
+		.bDescriptorSubtype = USB_MIDI_SUBTYPE_MIDI_IN_JACK,
+		.bJackType = USB_MIDI_JACK_TYPE_EXTERNAL,
+		.bJackID = 0x0a,
+		.iJack = 0x00,
+	},
+	/* Table B-9: MIDI Adapter MIDI OUT Jack Descriptor (Embedded) */
+	.out_embedded3 = {
+		.head = {
+			.bLength = sizeof(struct usb_midi_out_jack_descriptor),
+			.bDescriptorType = USB_AUDIO_DT_CS_INTERFACE,
+			.bDescriptorSubtype = USB_MIDI_SUBTYPE_MIDI_OUT_JACK,
+			.bJackType = USB_MIDI_JACK_TYPE_EMBEDDED,
+			.bJackID = 0x0b,
+			.bNrInputPins = 1,
+		},
+		.source[0] = {
+			.baSourceID = 0x0a,
+			.baSourcePin = 0x01,
+		},
+		.tail = {
+			.iJack = 0x00,
+		}
+	},
+	/* Table B-10: MIDI Adapter MIDI OUT Jack Descriptor (External) */
+	.out_external3 = {
+		.head = {
+			.bLength = sizeof(struct usb_midi_out_jack_descriptor),
+			.bDescriptorType = USB_AUDIO_DT_CS_INTERFACE,
+			.bDescriptorSubtype = USB_MIDI_SUBTYPE_MIDI_OUT_JACK,
+			.bJackType = USB_MIDI_JACK_TYPE_EXTERNAL,
+			.bJackID = 0x0c,
+			.bNrInputPins = 1,
+		},
+		.source[0] = {
+			.baSourceID = 0x09,
 			.baSourcePin = 0x01,
 		},
 		.tail = {
@@ -262,247 +397,309 @@ static const char *usb_strings[] = {
 
 enum
 {
-	MIDI_CIN_MISC					= 0,
-	MIDI_CIN_CABLE_EVENT				= 1,
-	MIDI_CIN_SYSCOM_2BYTE				= 2,
-	MIDI_CIN_SYSCOM_3BYTE				= 3,
-	MIDI_CIN_SYSEX_START				= 4,
-	MIDI_CIN_SYSEX_END_1BYTE			= 5,
-	MIDI_CIN_SYSEX_END_2BYTE			= 6,
-	MIDI_CIN_SYSEX_END_3BYTE			= 7,
-	MIDI_CIN_NOTE_OFF				= 8,
-	MIDI_CIN_NOTE_ON				= 9,
-	MIDI_CIN_POLY_KEYPRESS				= 10,
-	MIDI_CIN_CONTROL_CHANGE				= 11,
-	MIDI_CIN_PROGRAM_CHANGE				= 12,
-	MIDI_CIN_CHANNEL_PRESSURE			= 13,
-	MIDI_CIN_PITCH_BEND_CHANGE			= 14,
-	MIDI_CIN_1BYTE_DATA				= 15,
+	MIDI_CIN_MISC,
+	MIDI_CIN_CABLE_EVENT,
+	MIDI_CIN_SYSCOM_2BYTE,
+	MIDI_CIN_SYSCOM_3BYTE,
+	MIDI_CIN_SYSEX_START,
+	MIDI_CIN_SYSEX_END_1BYTE,
+	MIDI_CIN_SYSEX_END_2BYTE,
+	MIDI_CIN_SYSEX_END_3BYTE,
+	MIDI_CIN_NOTE_OFF,
+	MIDI_CIN_NOTE_ON,
+	MIDI_CIN_POLY_KEYPRESS,
+	MIDI_CIN_CONTROL_CHANGE,
+	MIDI_CIN_PROGRAM_CHANGE,
+	MIDI_CIN_CHANNEL_PRESSURE,
+	MIDI_CIN_PITCH_BEND_CHANGE,
+	MIDI_CIN_1BYTE_DATA,
 };
 
 enum
 {
-	MIDI_STATUS_SYSEX_START				= 0xF0,
-	MIDI_STATUS_SYSEX_END				= 0xF7,
-	MIDI_STATUS_SYSCOM_TIME_CODE_QUARTER_FRAME	= 0xF1,
-	MIDI_STATUS_SYSCOM_SONG_POSITION_POINTER	= 0xF2,
-	MIDI_STATUS_SYSCOM_SONG_SELECT			= 0xF3,
-	MIDI_STATUS_SYSCOM_TUNE_REQUEST			= 0xF6,
-	MIDI_STATUS_SYSREAL_TIMING_CLOCK		= 0xF8,
-	MIDI_STATUS_SYSREAL_START			= 0xFA,
-	MIDI_STATUS_SYSREAL_CONTINUE			= 0xFB,
-	MIDI_STATUS_SYSREAL_STOP			= 0xFC,
-	MIDI_STATUS_SYSREAL_ACTIVE_SENSING		= 0xFE,
-	MIDI_STATUS_SYSREAL_SYSTEM_RESET		= 0xFF,
+	MIDI_STATUS_SYSEX_START				= 0xf0,
+	MIDI_STATUS_SYSEX_END				= 0xf7,
+	MIDI_STATUS_SYSCOM_TIME_CODE_QUARTER_FRAME	= 0xf1,
+	MIDI_STATUS_SYSCOM_SONG_POSITION_POINTER	= 0xf2,
+	MIDI_STATUS_SYSCOM_SONG_SELECT			= 0xf3,
+	MIDI_STATUS_SYSCOM_TUNE_REQUEST			= 0xf6,
+	MIDI_STATUS_SYSREAL_TIMING_CLOCK		= 0xf8,
+	MIDI_STATUS_SYSREAL_START			= 0xfa,
+	MIDI_STATUS_SYSREAL_CONTINUE			= 0xfb,
+	MIDI_STATUS_SYSREAL_STOP			= 0xfc,
+	MIDI_STATUS_SYSREAL_ACTIVE_SENSING		= 0xfe,
+	MIDI_STATUS_SYSREAL_SYSTEM_RESET		= 0xff,
 };
 
-static volatile uint8_t buf_rx[256] = { 0 };
-static volatile uint8_t buf_rx_head = 0;
-static volatile uint8_t buf_rx_tail = 0;
-static volatile uint8_t buf_tx[256] = { 0 };
-static volatile uint8_t buf_tx_head = 0;
-static volatile uint8_t buf_tx_tail = 0;
+struct rbuf {
+	uint32_t usart;
+	uint8_t buf[1024]; /* Size must be a power of 2. */
+	uint32_t head;
+	uint32_t tail;
+};
+
+__inline__
+static void rbuf_put(volatile struct rbuf *rbuf, const uint8_t data)
+{
+	rbuf->buf[rbuf->head] = data;
+	rbuf->head = (rbuf->head + 1) & (sizeof(rbuf->buf) - 1);
+}
+
+__inline__
+static uint8_t rbuf_get(volatile struct rbuf *rbuf)
+{
+	uint8_t data;
+
+	data = rbuf->buf[rbuf->tail];
+	rbuf->tail = (rbuf->tail + 1) & (sizeof(rbuf->buf) - 1);
+
+	return data;
+}
+
+__inline__
+static uint8_t rbuf_empty(volatile struct rbuf *rbuf)
+{
+	return (rbuf->head == rbuf->tail);
+}
+
+__inline__
+static uint32_t rbuf_space(volatile struct rbuf *rbuf) /* Return free space */
+{
+	return ((rbuf->tail - rbuf->head - 1) & (sizeof(rbuf->buf) - 1));
+}
+
+static volatile struct rbuf rbuf_rx[3] = { 0 };
+static volatile struct rbuf rbuf_tx[3] = { 0 };
 
 static volatile uint8_t leds = 0;
 #if 1 /* For bluepill board. */
-#define LED_RX(x)	do { (x) ? (leds |= 0b01) : (leds &= ~0b01); leds ? gpio_clear(GPIOC, GPIO13) : gpio_set(GPIOC, GPIO13); } while (0)
-#define LED_TX(x)	do { (x) ? (leds |= 0b10) : (leds &= ~0b10); leds ? gpio_clear(GPIOC, GPIO13) : gpio_set(GPIOC, GPIO13); } while (0)
+#define LED_ON		(GPIO_BSRR(GPIOC) = (GPIO13 << 16))
+#define LED_OFF		(GPIO_BSRR(GPIOC) = GPIO13)
 #else /* For strange CKS32 board. */
-#define LED_RX(x)	do { (x) ? (leds |= 0b01) : (leds &= ~0b01); leds ? gpio_set(GPIOC, GPIO13) : gpio_clear(GPIOC, GPIO13); } while (0)
-#define LED_TX(x)	do { (x) ? (leds |= 0b10) : (leds &= ~0b10); leds ? gpio_set(GPIOC, GPIO13) : gpio_clear(GPIOC, GPIO13); } while (0)
+#define LED_ON		(GPIO_BSRR(GPIOC) = GPIO13)
+#define LED_OFF		(GPIO_BSRR(GPIOC) = (GPIO13 << 16))
 #endif
+#define LED_RX_ON(x)	do { leds |= (1 << ((x) * 2)); leds ? LED_ON : LED_OFF; } while (0)
+#define LED_RX_OFF(x)	do { leds &= ~(1 << ((x) * 2)); leds ? LED_ON : LED_OFF; } while (0)
+#define LED_TX_ON(x)	do { leds |= (1 << ((x) * 2 + 1)); leds ? LED_ON : LED_OFF; } while (0)
+#define LED_TX_OFF(x)	do { leds &= ~(1 << ((x) * 2 + 1)); leds ? LED_ON : LED_OFF; } while (0)
 
 static void usbmidi_data_rx_cb(usbd_device *usbd_dev, uint8_t ep __attribute__((unused)))
 {
 	uint8_t buf[64];
 	uint16_t len = usbd_ep_read_packet(usbd_dev, 0x01, buf, 64);
-	static uint8_t status = 0;
+	static uint8_t status[3] = { 0 };
 
 	for (uint16_t i = 0 ; i < len ; i += 4) {
+		const uint8_t cn = buf[i + 0] >> 4;
+		if (3 <= cn) {
+			continue;
+		}
+		volatile struct rbuf *p = &rbuf_tx[cn];
+		while (rbuf_space(p) < 3);
 		switch (buf[i + 0] & 0x0f) {
 			case MIDI_CIN_SYSCOM_3BYTE:
 			case MIDI_CIN_SYSEX_START:
 			case MIDI_CIN_SYSEX_END_3BYTE:
-				buf_tx[buf_tx_head] = buf[i + 1];
-				buf_tx_head++;
-				buf_tx[buf_tx_head] = buf[i + 2];
-				buf_tx_head++;
-				buf_tx[buf_tx_head] = buf[i + 3];
-				buf_tx_head++;
-				LED_TX(1);
-				USART_CR1(USART1) |= USART_CR1_TXEIE;
+				rbuf_put(p, buf[i + 1]);
+				rbuf_put(p, buf[i + 2]);
+				rbuf_put(p, buf[i + 3]);
+				LED_TX_ON(cn);
+				USART_CR1(p->usart) |= USART_CR1_TXEIE;
 				break;
 			case MIDI_CIN_NOTE_OFF:
 			case MIDI_CIN_NOTE_ON:
 			case MIDI_CIN_POLY_KEYPRESS:
 			case MIDI_CIN_CONTROL_CHANGE:
 			case MIDI_CIN_PITCH_BEND_CHANGE:
-				if (buf[i + 1] != status) { /* Running Status? */
-					buf_tx[buf_tx_head] = buf[i + 1];
-					buf_tx_head++;
+				if (buf[i + 1] != status[cn]) { /* Running Status? */
+					rbuf_put(p, buf[i + 1]);
 				}
-				buf_tx[buf_tx_head] = buf[i + 2];
-				buf_tx_head++;
-				buf_tx[buf_tx_head] = buf[i + 3];
-				buf_tx_head++;
-				LED_TX(1);
-				USART_CR1(USART1) |= USART_CR1_TXEIE;
+				rbuf_put(p, buf[i + 2]);
+				rbuf_put(p, buf[i + 3]);
+				LED_TX_ON(cn);
+				USART_CR1(p->usart) |= USART_CR1_TXEIE;
 				break;
 			case MIDI_CIN_SYSCOM_2BYTE:
 			case MIDI_CIN_SYSEX_END_2BYTE:
-				buf_tx[buf_tx_head] = buf[i + 1];
-				buf_tx_head++;
-				buf_tx[buf_tx_head] = buf[i + 2];
-				buf_tx_head++;
-				LED_TX(1);
-				USART_CR1(USART1) |= USART_CR1_TXEIE;
+				rbuf_put(p, buf[i + 1]);
+				rbuf_put(p, buf[i + 2]);
+				LED_TX_ON(cn);
+				USART_CR1(p->usart) |= USART_CR1_TXEIE;
 				break;
 			case MIDI_CIN_PROGRAM_CHANGE:
 			case MIDI_CIN_CHANNEL_PRESSURE:
-				if (buf[i + 1] != status) { /* Running Status? */
-					buf_tx[buf_tx_head] = buf[i + 1];
-					buf_tx_head++;
+				if (buf[i + 1] != status[cn]) { /* Running Status? */
+					rbuf_put(p, buf[i + 1]);
 				}
-				buf_tx[buf_tx_head] = buf[i + 2];
-				buf_tx_head++;
-				LED_TX(1);
-				USART_CR1(USART1) |= USART_CR1_TXEIE;
+				rbuf_put(p, buf[i + 2]);
+				LED_TX_ON(cn);
+				USART_CR1(p->usart) |= USART_CR1_TXEIE;
 				break;
 			case MIDI_CIN_SYSEX_END_1BYTE:
 			case MIDI_CIN_1BYTE_DATA:
-				buf_tx[buf_tx_head] = buf[i + 1];
-				buf_tx_head++;
-				LED_TX(1);
-				USART_CR1(USART1) |= USART_CR1_TXEIE;
+				rbuf_put(p, buf[i + 1]);
+				LED_TX_ON(cn);
+				USART_CR1(p->usart) |= USART_CR1_TXEIE;
 				break;
 			case MIDI_CIN_MISC:
 			case MIDI_CIN_CABLE_EVENT:
 			default:
-				break;
+				continue;
 		}
 		if (buf[i + 1] < MIDI_STATUS_SYSREAL_TIMING_CLOCK) {
-			status = buf[i + 1];
+			status[cn] = buf[i + 1];
 		}
 	}
 }
 
-static void usbmidi_data_tx(usbd_device *usbd_dev, uint8_t data)
+static void usbmidi_data_tx(usbd_device *usbd_dev, const uint8_t cn, const uint8_t data)
 {
-	static uint8_t buf[4] = { 0 };
-	static uint8_t index = 0, total = 0;
+	struct packet {
+		uint8_t buf[4];
+		uint8_t index;
+		uint8_t total;
+	};
+	static struct packet packet[3] = { 0 };
+	struct packet *p = &packet[cn];
+	const uint8_t _msg = p->buf[0] & 0x0f;
 
-	if (data >= MIDI_STATUS_SYSREAL_TIMING_CLOCK) { /* real-time messages need to be sent right away */
-		uint8_t rtbuf[4];
-		rtbuf[0] = MIDI_CIN_1BYTE_DATA;
-		rtbuf[1] = data;
-		rtbuf[2] = 0;
-		rtbuf[3] = 0;
-		while (!usbd_ep_write_packet(usbd_dev, 0x81, rtbuf, sizeof(rtbuf)));
-		LED_RX(0);
-	} else if (index == 0) { /* New event packet */
-		uint8_t const msg = data >> 4;
-		uint8_t const _msg = buf[0] & 0x0F;
-		index = 2;
-		total = 4;
+	if (MIDI_STATUS_SYSREAL_TIMING_CLOCK <= data) { /* real-time messages need to be sent right away */
+		const uint8_t rtbuf[4] = { (cn << 4) | MIDI_CIN_1BYTE_DATA, data, 0, 0 };
+		while (!usbd_ep_write_packet(usbd_dev, 0x81, rtbuf, sizeof(rtbuf))) {
+			usbd_poll(usbd_dev);
+		}
+		LED_RX_OFF(cn);
+		return;
+	}
+
+	if (p->index == 0) { /* New event packet */
+		const uint8_t msg = data >> 4;
+		p->index = 2;
+		p->total = 4;
 
 		/* Check to see if we're still in a SysEx transmit. */
 		if (_msg == MIDI_CIN_SYSEX_START) {
 			if (data == MIDI_STATUS_SYSEX_END) {
-				buf[0] = MIDI_CIN_SYSEX_END_1BYTE;
-				total = 2;
+				p->buf[0] = MIDI_CIN_SYSEX_END_1BYTE;
+				p->total = 2;
 			}
-			buf[1] = data;
-		} else if ((msg < 0x8) && (_msg >= 0x8) && (_msg < 0xF)) { /* Running Status? */
-			buf[2] = data;
-			if ((_msg < 0xC) || (_msg == 0xE)) {
-				index = 3;
+			p->buf[1] = data;
+		} else if ((msg < 0x8) && (0x8 <= _msg) && (_msg < 0xf)) { /* Running Status? */
+			p->buf[2] = data;
+			if ((_msg < 0xc) || (_msg == 0xe)) {
+				p->index = 3;
 			} else {
-				index = 3;
-				total = 3;
+				p->index = 3;
+				p->total = 3;
 			}
-		} else if (((msg >= 0x8) && (msg <= 0xB)) || (msg == 0xE)) { /* Channel Voice Messages */
-			buf[0] = msg;
-			buf[1] = data;
-		} else if ((msg == 0xC) || (msg == 0xD)) { /* Channel Voice Messages, two-byte variants (Program Change and Channel Pressure) */
-			buf[0] = msg;
-			buf[1] = data;
-			total = 3;
+		} else if (((0x8 <= msg) && (msg <= 0xb)) || (msg == 0xe)) { /* Channel Voice Messages */
+			p->buf[0] = msg;
+			p->buf[1] = data;
+		} else if ((msg == 0xc) || (msg == 0xd)) { /* Channel Voice Messages, two-byte variants (Program Change and Channel Pressure) */
+			p->buf[0] = msg;
+			p->buf[1] = data;
+			p->total = 3;
 		} else if (msg == 0xf) { /* System message */
 			if (data == MIDI_STATUS_SYSEX_START) {
-				buf[0] = MIDI_CIN_SYSEX_START;
+				p->buf[0] = MIDI_CIN_SYSEX_START;
 			} else if (data == MIDI_STATUS_SYSCOM_TIME_CODE_QUARTER_FRAME || data == MIDI_STATUS_SYSCOM_SONG_SELECT) {
-				buf[0] = MIDI_CIN_SYSCOM_2BYTE;
-				total = 3;
+				p->buf[0] = MIDI_CIN_SYSCOM_2BYTE;
+				p->total = 3;
 			} else if (data == MIDI_STATUS_SYSCOM_SONG_POSITION_POINTER) {
-				buf[0] = MIDI_CIN_SYSCOM_3BYTE;
+				p->buf[0] = MIDI_CIN_SYSCOM_3BYTE;
 			} else { /* for example, MIDI_STATUS_SYSCOM_TUNE_REQUEST */
-				buf[0] = MIDI_CIN_1BYTE_DATA;
-				total = 2;
+				p->buf[0] = MIDI_CIN_1BYTE_DATA;
+				p->total = 2;
 			}
-			buf[1] = data;
+			p->buf[1] = data;
 		} else { /* Pack individual bytes if we don't support packing them into words. */
-			buf[0] = MIDI_CIN_1BYTE_DATA;
-			buf[1] = data;
-			index = 2;
-			total = 2;
+			p->buf[0] = MIDI_CIN_1BYTE_DATA;
+			p->buf[1] = data;
+			p->total = 2;
 		}
 	} else { /* On-going (buffering) packet */
-		buf[index++] = data;
+		p->buf[p->index++] = data;
 		/* See if this byte ends a SysEx. */
-		if ((buf[0] == MIDI_CIN_SYSEX_START) && (data == MIDI_STATUS_SYSEX_END)) {
-			buf[0] = MIDI_CIN_SYSEX_START + (index - 1); /* END +1/+2/+3 Bytes */
-			total = index;
+		if ((_msg == MIDI_CIN_SYSEX_START) && (data == MIDI_STATUS_SYSEX_END)) {
+			p->buf[0] = MIDI_CIN_SYSEX_START + (p->index - 1); /* END +1/+2/+3 Bytes */
+			p->total = p->index;
 		}
 	}
 
 	/* Send out packet */
-	if ((index >= 2) && (index >= total)) {
+	if ((2 <= p->index) && (p->total <= p->index)) {
 		/* zeroes unused bytes */
-		for (uint8_t idx = total ; idx < 4 ; idx++) {
-			buf[idx] = 0;
+		for (uint8_t i = p->total ; i < 4 ; i++) {
+			p->buf[i] = 0;
 		}
-		while (!usbd_ep_write_packet(usbd_dev, 0x81, buf, sizeof(buf)));
-		LED_RX(0);
-		index = 0;
+		p->buf[0] |= (cn << 4);
+		while (!usbd_ep_write_packet(usbd_dev, 0x81, p->buf, sizeof(p->buf))) {
+			usbd_poll(usbd_dev);
+		}
+		LED_RX_OFF(cn);
+		p->index = 0;
 	}
 }
+
+static uint8_t initialized = 0;
 
 static void usbmidi_set_config(usbd_device *usbd_dev, uint16_t wValue __attribute__((unused)))
 {
 	usbd_ep_setup(usbd_dev, 0x01, USB_ENDPOINT_ATTR_BULK, 64, usbmidi_data_rx_cb);
 	usbd_ep_setup(usbd_dev, 0x81, USB_ENDPOINT_ATTR_BULK, 64, NULL);
+	initialized = 1;
+}
+
+__inline__
+static void usart_isr(const uint8_t cn)
+{
+	/* Check if we were called because of RXNE. */
+	if ((USART_CR1(rbuf_rx[cn].usart) & USART_CR1_RXNEIE) && (USART_SR(rbuf_rx[cn].usart) & USART_SR_RXNE)) {
+		if (rbuf_space(&rbuf_rx[cn])) {
+			rbuf_put(&rbuf_rx[cn], USART_DR(rbuf_rx[cn].usart));
+			LED_RX_ON(cn);
+		} else {
+			(void)USART_DR(rbuf_rx[cn].usart);
+		}
+	}
+
+	/* Check if we were called because of TXE. */
+	if ((USART_CR1(rbuf_tx[cn].usart) & USART_CR1_TXEIE) && (USART_SR(rbuf_tx[cn].usart) & USART_SR_TXE)) {
+		if (!rbuf_empty(&rbuf_tx[cn])) {
+			USART_DR(rbuf_tx[cn].usart) = rbuf_get(&rbuf_tx[cn]);
+		}
+		if (rbuf_empty(&rbuf_tx[cn])) {
+			USART_CR1(rbuf_tx[cn].usart) &= ~USART_CR1_TXEIE; /* Disable the TXE interrupt as we don't need it anymore. */
+			LED_TX_OFF(cn);
+		}
+	}
 }
 
 void usart1_isr(void)
 {
-	/* Check if we were called because of RXNE. */
-	if ((USART_CR1(USART1) & USART_CR1_RXNEIE) && (USART_SR(USART1) & USART_SR_RXNE)) {
-		buf_rx[buf_rx_head] = usart_recv(USART1);
-		buf_rx_head++;
-		LED_RX(1);
-	}
+	usart_isr(0);
+}
 
-	/* Check if we were called because of TXE. */
-	if ((USART_CR1(USART1) & USART_CR1_TXEIE) && (USART_SR(USART1) & USART_SR_TXE)) {
-		if (buf_tx_head != buf_tx_tail) {
-			usart_send(USART1, buf_tx[buf_tx_tail]);
-			buf_tx_tail++;
-		}
-		if (buf_tx_head == buf_tx_tail) {
-			USART_CR1(USART1) &= ~USART_CR1_TXEIE; /* Disable the TXE interrupt as we don't need it anymore. */
-			LED_TX(0);
-		}
-	}
+void usart2_isr(void)
+{
+	usart_isr(1);
+}
+
+void usart3_isr(void)
+{
+	usart_isr(2);
 }
 
 int main(void)
 {
 	usbd_device *usbd_dev;
-	uint8_t usbd_control_buffer[128]; /* Buffer to be used for control requests. */
+	static uint8_t usbd_control_buffer[256]; /* Buffer to be used for control requests. */
 
 	rcc_clock_setup_pll(&rcc_hse_configs[RCC_CLOCK_HSE8_72MHZ]);
 
-	/* UART */
+	/* USART1 */
+	rbuf_rx[0].usart = rbuf_tx[0].usart = USART1;
 #if 0	/* PA9=OUT, PA10=IN */
 	rcc_periph_clock_enable(RCC_GPIOA);
 	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO_USART1_TX);
@@ -528,11 +725,48 @@ int main(void)
 	nvic_enable_irq(NVIC_USART1_IRQ);
 	USART_CR1(USART1) |= USART_CR1_RXNEIE;
 
+	/* USART2 PA2=OUT PA3=IN */
+	rbuf_rx[1].usart = rbuf_tx[1].usart = USART2;
+	rcc_periph_clock_enable(RCC_GPIOA);
+	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO_USART2_TX);
+	gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_PULL_UPDOWN, GPIO_USART2_RX);
+	gpio_set(GPIOA, GPIO_USART2_RX); /* Pullup */
+
+	rcc_periph_clock_enable(RCC_USART2);
+	usart_set_baudrate(USART2, 31250);
+	usart_set_databits(USART2, 8);
+	usart_set_stopbits(USART2, USART_STOPBITS_1);
+	usart_set_parity(USART2, USART_PARITY_NONE);
+	usart_set_flow_control(USART2, USART_FLOWCONTROL_NONE);
+	usart_set_mode(USART2, USART_MODE_TX_RX);
+	usart_enable(USART2);
+
+	nvic_enable_irq(NVIC_USART2_IRQ);
+	USART_CR1(USART2) |= USART_CR1_RXNEIE;
+
+	/* USART3 PB10=OUT PB11=IN */
+	rbuf_rx[2].usart = rbuf_tx[2].usart = USART3;
+	rcc_periph_clock_enable(RCC_GPIOB);
+	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO_USART3_TX);
+	gpio_set_mode(GPIOB, GPIO_MODE_INPUT, GPIO_CNF_INPUT_PULL_UPDOWN, GPIO_USART3_RX);
+	gpio_set(GPIOB, GPIO_USART3_RX); /* Pullup */
+
+	rcc_periph_clock_enable(RCC_USART3);
+	usart_set_baudrate(USART3, 31250);
+	usart_set_databits(USART3, 8);
+	usart_set_stopbits(USART3, USART_STOPBITS_1);
+	usart_set_parity(USART3, USART_PARITY_NONE);
+	usart_set_flow_control(USART3, USART_FLOWCONTROL_NONE);
+	usart_set_mode(USART3, USART_MODE_TX_RX);
+	usart_enable(USART3);
+
+	nvic_enable_irq(NVIC_USART3_IRQ);
+	USART_CR1(USART3) |= USART_CR1_RXNEIE;
+
 	/* LED */
 	rcc_periph_clock_enable(RCC_GPIOC);
 	gpio_set_mode(GPIOC, GPIO_MODE_OUTPUT_2_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, GPIO13);
-	LED_RX(0);
-	LED_TX(0);
+	LED_OFF;
 
 	/* USB */
 	desig_get_unique_id_as_string(usb_serial_number, sizeof(usb_serial_number));
@@ -541,9 +775,38 @@ int main(void)
 
 	while(1) {
 		usbd_poll(usbd_dev);
-		while (buf_rx_head != buf_rx_tail) {
-			usbmidi_data_tx(usbd_dev, buf_rx[buf_rx_tail]);
-			buf_rx_tail++;
+		if (!initialized) {
+			continue;
+		}
+		for (uint8_t i = 0 ; i < 3 ; i++) {
+			while (!rbuf_empty(&rbuf_rx[i])) {
+				usbmidi_data_tx(usbd_dev, i, rbuf_get(&rbuf_rx[i]));
+			}
 		}
 	}
+}
+
+__attribute__ ((section(".romtext")))
+void reset_handler(void)
+{
+	volatile unsigned *src, *dest;
+	__attribute__ ((section(".ram_vectors"))) static vector_table_t ram_vector_table;
+
+	for (src = &_data_loadaddr, dest = &_data ; dest < &_edata ; src++, dest++) {
+		*dest = *src;
+	}
+
+	while (dest < &_ebss) {
+		*dest++ = 0;
+	}
+
+	ram_vector_table = vector_table;
+	SCB_VTOR = (uint32_t)&ram_vector_table;
+
+	/* Ensure 8-byte alignment of stack pointer on interrupts */
+	/* Enabled by default on most Cortex-M parts, but not M3 r1 */
+	SCB_CCR |= SCB_CCR_STKALIGN;
+
+	/* Call the application's entry point. */
+	main();
 }
